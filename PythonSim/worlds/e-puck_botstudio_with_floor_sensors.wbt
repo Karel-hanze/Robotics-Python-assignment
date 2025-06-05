@@ -1,0 +1,47 @@
+#VRML_SIM R2023a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/objects/floors/protos/RectangleArena.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/robots/gctronic/e-puck/protos/E-puck.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/robots/gctronic/e-puck/protos/E-puckGroundSensors.proto"
+
+WorldInfo {
+}
+Viewpoint {
+  orientation 0.2398698445239827 0.003300244679703396 -0.9707994468854493 2.96565158641289
+  position 0.5750742713259841 0.5342332808778504 0.27323175830243435
+  follow "e-puck"
+}
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+RectangleArena {
+  rotation 0 0 1 -1.5707953071795862
+  floorSize 1.2 1.8
+  floorTileSize 1.2 1.8
+  floorAppearance PBRAppearance {
+    baseColorMap ImageTexture {
+      url [
+        "https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/robots/gctronic/e-puck/worlds/textures/oval_line.png"
+      ]
+    }
+    roughness 1
+    metalness 0
+  }
+}
+DEF E_PUCK E-puck {
+  hidden rotation_1 0 1 0 2.7282329457448347
+  hidden rotation_2 0 1 0 2.7272281439496893
+  translation 0.05455456742716993 0.44000404362561635 -6.3941628282169e-05
+  rotation 0.0001112974063496371 0.9734072080009263 -0.2290816339751591 0.001489404110576464
+  controller "Lab3"
+  window "botstudio"
+  camera_width 40
+  camera_height 1
+  groundSensorsSlot [
+    E-puckGroundSensors {
+    }
+  ]
+}
