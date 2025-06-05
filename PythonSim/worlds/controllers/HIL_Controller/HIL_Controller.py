@@ -1,16 +1,15 @@
-"""line_following_with_HIL controller."""
 from controller import Robot
 import numpy as np
 import time
 import matplotlib.pyplot as plt
 
-# --- GRAPH and Dijkstra function ---
+# --- Graph and Dijkstra's Algorithm ---
 
+# Define the graph representing the robot's environment.
+# Each key is a node, and its value is a dictionary of connected neighbors
+# with their respective edge weights (distances).
 GRAPH = {
-    'B1': {'K1': 0.1},
-    'B2': {'K2': 0.1},
-    'B3': {'K3': 0.1},
-    'B4': {'K4': 0.1},
+    'B1': {'K1': 0.1}, 'B2': {'K2': 0.1}, 'B3': {'K3': 0.1}, 'B4': {'K4': 0.1},
     'M1': {'K1': 0.195, 'M2': 0.5, 'M4': 0.15},
     'M2': {'M1': 0.5, 'M3': 0.15},
     'M3': {'M2': 0.15, 'M4': 0.5, 'M7': 0.1},
@@ -30,477 +29,591 @@ GRAPH = {
     'K6': {'K5': 0.1, 'K7': 0.1, 'E2': 0.1},
     'K7': {'K6': 0.1, 'K8': 0.1, 'E3': 0.1},
     'K8': {'K7': 0.1, 'M11': 0.195, 'E4': 0.1},
-    'E1': {'K5': 0.1},
-    'E2': {'K6': 0.1},
-    'E3': {'K7': 0.1},
-    'E4': {'K8': 0.1}
+    'E1': {'K5': 0.1}, 'E2': {'K6': 0.1}, 'E3': {'K7': 0.1}, 'E4': {'K8': 0.1}
 }
 
 def dijkstra(graph, start, goal, blocked_paths=None):
     """
-    Calculates the shortest path from start to goal in a graph.
-    The graph is a dictionary of dictionaries: graph[node][neighbor] = weight.
-    blocked_paths: A list of tuples (node1, node2) indicating blocked paths.
-    Returns: (distance, list_of_nodes_in_path)
+    Calculates the shortest path from a start node to a goal node in a graph.
+
+    Args:
+        graph (dict): A dictionary representing the graph, where keys are nodes
+                      and values are dictionaries of neighbors with edge weights.
+        start (str): The label of the starting node.
+        goal (str): The label of the goal node.
+        blocked_paths (list, optional): A list of tuples, where each tuple
+                                        (node1, node2) represents a path segment
+                                        that cannot be traversed. Defaults to None.
+
+    Returns:
+        tuple: A tuple containing:
+               - float: The total distance of the shortest path.
+               - list: A list of node labels representing the shortest path.
+                       Returns an empty list if no path is found.
     """
     if blocked_paths is None:
         blocked_paths = []
 
     unvisited = set(graph.keys())
-    distance = {node: float('inf') for node in graph}
-    distance[start] = 0
-    parent = {node: None for node in graph}
+    distances = {node: float('inf') for node in graph}
+    distances[start] = 0
+    parents = {node: None for node in graph}
 
     while unvisited:
-        current = min(unvisited, key=lambda node: distance[node])
-        if distance[current] == float('inf'):
-            break
-        unvisited.remove(current)
+        # Find the unvisited node with the smallest distance
+        current_node = min(unvisited, key=lambda node: distances[node])
 
-        if current == goal:
+        # If the smallest distance is infinity, no more reachable nodes
+        if distances[current_node] == float('inf'):
             break
 
-        for neighbor, weight in graph[current].items():
-            # Check if the path is blocked in either direction
-            if (current, neighbor) in blocked_paths or (neighbor, current) in blocked_paths:
+        unvisited.remove(current_node)
+
+        # If goal is reached, break
+        if current_node == goal:
+            break
+
+        for neighbor, weight in graph[current_node].items():
+            # Check if the path segment is blocked in either direction
+            if (current_node, neighbor) in blocked_paths or \
+               (neighbor, current_node) in blocked_paths:
                 continue
 
-            new_dist = distance[current] + weight
-            if new_dist < distance[neighbor]:
-                distance[neighbor] = new_dist
-                parent[neighbor] = current
+            new_dist = distances[current_node] + weight
+            if new_dist < distances[neighbor]:
+                distances[neighbor] = new_dist
+                parents[neighbor] = current_node
 
     path = []
     node = goal
-    # Only build path if the goal was reachable
-    if distance[goal] != float('inf'):
+    # Reconstruct the path if the goal was reachable
+    if distances[goal] != float('inf'):
         while node is not None:
             path.insert(0, node)
-            node = parent[node]
-    return distance[goal], path
+            node = parents[node]
+    return distances[goal], path
 
+# --- Robot Initialization and Configuration ---
 
-# --- Initialize variables (COORDINATES defined here for plot limits) ---
-
-MAX_SPEED = 6.28
-speed = 0.4 * MAX_SPEED
-
+MAX_SPEED = 6.28  # Maximum speed of the robot's wheels
+DEFAULT_SPEED_FACTOR = 0.4 # Factor to apply to MAX_SPEED for general movement
 robot = Robot()
-timestep = int(robot.getBasicTimeStep())    # [ms]
-delta_t = timestep/1000.0    # [s]
+timestep = int(robot.getBasicTimeStep())  # Simulation timestep in milliseconds
+delta_t = timestep / 1000.0  # Simulation timestep in seconds
 
-states = ['forward', 'turn_right', 'turn_left', 'stop', 'obstacle_avoidance']
-current_state = 'stop'
+# Define possible robot states for state machine control
+ROBOT_STATES = ['forward', 'turn_right', 'turn_left', 'stop', 'obstacle_avoidance']
+current_robot_state = 'stop'
 
-# --- Initialize devices ---
-
-ps = []
-psNames = ['ps0', 'ps1', 'ps2', 'ps3', 'ps4', 'ps5', 'ps6', 'ps7']
+# Initialize proximity sensors (for obstacle detection)
+proximity_sensors = []
+proximity_sensor_names = ['ps0', 'ps1', 'ps2', 'ps3', 'ps4', 'ps5', 'ps6', 'ps7']
 for i in range(8):
-    ps.append(robot.getDevice(psNames[i]))
-    ps[i].enable(timestep)
+    ps_sensor = robot.getDevice(proximity_sensor_names[i])
+    ps_sensor.enable(timestep)
+    proximity_sensors.append(ps_sensor)
 
-encoder = []
-encoderNames = ['left wheel sensor', 'right wheel sensor']
+# Initialize wheel encoders (for odometry)
+wheel_encoders = []
+encoder_names = ['left wheel sensor', 'right wheel sensor']
 for i in range(2):
-    encoder.append(robot.getDevice(encoderNames[i]))
-    encoder[i].enable(timestep)
-oldEncoderValues = []
+    encoder = robot.getDevice(encoder_names[i])
+    encoder.enable(timestep)
+    wheel_encoders.append(encoder)
+previous_encoder_values = [] # Stores encoder values from the previous step
 
-gs = []
-gsNames = ['gs0', 'gs1', 'gs2']
+# Initialize ground sensors (for line following, though not actively used in this version)
+ground_sensors = []
+ground_sensor_names = ['gs0', 'gs1', 'gs2']
 for i in range(3):
-    gs.append(robot.getDevice(gsNames[i]))
-    gs[i].enable(timestep)
+    gs_sensor = robot.getDevice(ground_sensor_names[i])
+    gs_sensor.enable(timestep)
+    ground_sensors.append(gs_sensor)
 
-leftMotor = robot.getDevice('left wheel motor')
-rightMotor = robot.getDevice('right wheel motor')
-leftMotor.setPosition(float('inf'))
-rightMotor.setPosition(float('inf'))
-leftMotor.setVelocity(0.0)
-rightMotor.setVelocity(0.0)
+# Initialize wheel motors
+left_motor = robot.getDevice('left wheel motor')
+right_motor = robot.getDevice('right wheel motor')
+left_motor.setPosition(float('inf'))  # Set to infinity for velocity control
+right_motor.setPosition(float('inf'))
+left_motor.setVelocity(0.0)
+right_motor.setVelocity(0.0)
 
+# Robot physical parameters
+ROBOT_WHEEL_RADIUS = 0.020  # meters
+ROBOT_AXLE_LENGTH = 0.057   # meters (distance between wheels)
+
+# Define precise coordinates for each node in the graph for plotting and navigation
 COORDINATES = {
-    'B1': (0.19, -0.35),
-    'B2': (0.295, -0.35),
-    'B3': (0.395, -0.35),
-    'B4': (0.5, -0.35),
-    'M1': (0, -0.25),
-    'M2': (-0.5, -0.25),
-    'M3': (-0.5, -0.1),
-    'M4': (0, -0.1),
-    'M5': (0.5, 0),
-    'M6': (0, 0),
-    'M7': (-0.5, 0),
-    'M8': (0, 0.1),
-    'M9': (0.5, 0.1),
-    'M10': (0.5, 0.25),
-    'M11': (0, 0.25),
-    'K1': (0.19, -0.25),
-    'K2': (0.295, -0.25),
-    'K3': (0.395, -0.25),
-    'K4': (0.5, -0.25),
-    'K5': (-0.5, 0.25),
-    'K6': (-0.395, 0.25),
-    'K7': (-0.295, 0.25),
-    'K8': (-0.195, 0.25),
-    'E1': (-0.5, 0.35),
-    'E2': (-0.395, 0.35),
-    'E3': (-0.295, 0.35),
-    'E4': (-0.195, 0.35),
+    'B1': (0.19, -0.35), 'B2': (0.295, -0.35), 'B3': (0.395, -0.35), 'B4': (0.5, -0.35),
+    'M1': (0, -0.25), 'M2': (-0.5, -0.25), 'M3': (-0.5, -0.1), 'M4': (0, -0.1),
+    'M5': (0.5, 0), 'M6': (0, 0), 'M7': (-0.5, 0), 'M8': (0, 0.1),
+    'M9': (0.5, 0.1), 'M10': (0.5, 0.25), 'M11': (0, 0.25),
+    'K1': (0.19, -0.25), 'K2': (0.295, -0.25), 'K3': (0.395, -0.25), 'K4': (0.5, -0.25),
+    'K5': (-0.5, 0.25), 'K6': (-0.395, 0.25), 'K7': (-0.295, 0.25), 'K8': (-0.195, 0.25),
+    'E1': (-0.5, 0.35), 'E2': (-0.395, 0.35), 'E3': (-0.295, 0.35), 'E4': (-0.195, 0.35),
 }
 
-R = 0.020
-D = 0.057
+# --- Robot Kinematics Functions ---
 
-def get_wheels_speed(encoderValues, oldEncoderValues, delta_t):
-    wl = (encoderValues[0] - oldEncoderValues[0])/delta_t
-    wr = (encoderValues[1] - oldEncoderValues[1])/delta_t
-    return wl, wr
+def get_wheel_speeds(current_encoder_values, previous_encoder_values, dt):
+    """Calculate the angular speeds of the left and right wheels."""
+    left_wheel_angular_speed = (current_encoder_values[0] - previous_encoder_values[0]) / dt
+    right_wheel_angular_speed = (current_encoder_values[1] - previous_encoder_values[1]) / dt
+    return left_wheel_angular_speed, right_wheel_angular_speed
 
-def get_robot_speeds(wl, wr, r, d):
-    u = r/2.0 * (wr + wl)
-    w = r/d * (wr - wl)
-    return u, w
+def get_robot_velocities(left_angular_speed, right_angular_speed, wheel_radius, axle_length):
+    """
+    Calculate the robot's linear and angular velocities from wheel speeds.
 
-def get_robot_pose(u, w, x_old, y_old, phi_old, delta_t):
-    delta_phi = w * delta_t
+    Args:
+        left_angular_speed (float): Angular speed of the left wheel (rad/s).
+        right_angular_speed (float): Angular speed of the right wheel (rad/s).
+        wheel_radius (float): Radius of the robot's wheels (m).
+        axle_length (float): Distance between the robot's wheels (m).
+
+    Returns:
+        tuple: A tuple containing:
+               - float: Robot's linear velocity (m/s).
+               - float: Robot's angular velocity (rad/s).
+    """
+    linear_velocity = wheel_radius / 2.0 * (right_angular_speed + left_angular_speed)
+    angular_velocity = wheel_radius / axle_length * (right_angular_speed - left_angular_speed)
+    return linear_velocity, angular_velocity
+
+def update_robot_pose(linear_velocity, angular_velocity, x_old, y_old, phi_old, dt):
+    """
+    Update the robot's pose (x, y, orientation) using differential drive kinematics.
+
+    Args:
+        linear_velocity (float): Robot's linear velocity (m/s).
+        angular_velocity (float): Robot's angular velocity (rad/s).
+        x_old (float): Previous X coordinate.
+        y_old (float): Previous Y coordinate.
+        phi_old (float): Previous orientation (radians).
+        dt (float): Time step (seconds).
+
+    Returns:
+        tuple: A tuple containing:
+               - float: New X coordinate.
+               - float: New Y coordinate.
+               - float: New orientation (radians, normalized to [-pi, pi)).
+    """
+    delta_phi = angular_velocity * dt
     phi = phi_old + delta_phi
-    if phi >= np.pi:
-        phi = phi - 2*np.pi
-    elif phi < -np.pi:
-        phi = phi + 2*np.pi
+
+    # Normalize angle to [-pi, pi)
+    phi = (phi + np.pi) % (2 * np.pi) - np.pi
     
-    delta_x = u * np.cos(phi) * delta_t
-    delta_y = u * np.sin(phi) * delta_t
+    delta_x = linear_velocity * np.cos(phi) * dt
+    delta_y = linear_velocity * np.sin(phi) * dt
     x = x_old + delta_x
     y = y_old + delta_y
 
     return x, y, phi
 
-def angle_diff_to_point(x, y, phi, target_x, target_y):
-    import math
-    desired_angle = math.atan2(target_y - y, target_x - x)
-    diff = desired_angle - phi
-    while diff > math.pi:
-        diff -= 2*math.pi
-    while diff < -math.pi:
-        diff += 2*math.pi
+def angle_to_point(current_x, current_y, current_phi, target_x, target_y):
+    """
+    Calculates the angular difference from the robot's current orientation
+    to the direction of a target point.
+
+    Args:
+        current_x (float): Robot's current X coordinate.
+        current_y (float): Robot's current Y coordinate.
+        current_phi (float): Robot's current orientation (radians).
+        target_x (float): Target point's X coordinate.
+        target_y (float): Target point's Y coordinate.
+
+    Returns:
+        float: The angular difference (radians) to turn to face the target.
+               Positive for left turn, negative for right turn.
+    """
+    desired_angle = np.arctan2(target_y - current_y, target_x - current_x)
+    diff = desired_angle - current_phi
+    # Normalize angle difference to [-pi, pi)
+    diff = (diff + np.pi) % (2 * np.pi) - np.pi
     return diff
 
-def distance_to_point(x, y, target_x, target_y):
-    return ((x - target_x)**2 + (y - target_y)**2)**0.5
+def calculate_distance(x1, y1, x2, y2):
+    """Calculates the Euclidean distance between two points."""
+    return np.sqrt((x1 - x2)**2 + (y1 - y2)**2)
 
-# --- Plot Setup with fixed limits ---
+# --- Plotting Setup ---
 
-# Determine min/max coordinates for stable plot limits
+# Determine min/max coordinates for stable plot limits based on all defined nodes
 min_x = min(coord[0] for coord in COORDINATES.values())
 max_x = max(coord[0] for coord in COORDINATES.values())
 min_y = min(coord[1] for coord in COORDINATES.values())
 max_y = max(coord[1] for coord in COORDINATES.values())
 
-# Add a small buffer to the limits
-buffer = 0.1
-plot_xlim = (min_x - buffer, max_x + buffer)
-plot_ylim = (min_y - buffer, max_y + buffer)
+# Add a small buffer to the plot limits for better visualization
+PLOT_BUFFER = 0.1
+plot_xlim = (min_x - PLOT_BUFFER, max_x + PLOT_BUFFER)
+plot_ylim = (min_y - PLOT_BUFFER, max_y + PLOT_BUFFER)
 
-# Set up the plot once at the beginning
-plt.figure(figsize=(8, 8)) # Optional: Set a fixed figure size (width, height in inches)
+# Set up the Matplotlib plot once at the beginning
+# Create the figure and a single subplot (axes)
+fig, ax = plt.subplots(figsize=(9, 9)) # Set a fixed figure size (width, height in inches)
 plt.ion() # Turn on interactive mode for non-blocking updates
 
-def plot_route(graph_coords, initial_path_coords, current_route_coords, blocked_paths, current_robot_pose=None):
-    plt.clf() # Clear the current figure for fresh plotting
+def plot_navigation_status(graph_coordinates, initial_path_coords, current_route_coords, blocked_segments, current_robot_pose=None):
+    """
+    Plots the robot's navigation status, including nodes, paths, blocked segments,
+    and the robot's current position and orientation.
 
-    # Set fixed axis limits
-    plt.xlim(plot_xlim)
-    plt.ylim(plot_ylim)
+    Args:
+        graph_coordinates (dict): Dictionary of all node labels and their (x,y) coordinates.
+        initial_path_coords (list): List of (x,y) coordinates representing the initial planned route.
+        current_route_coords (list): List of (x,y) coordinates representing the currently active route.
+        blocked_segments (list): List of tuples ((node1_label, node2_label)) of blocked paths.
+        current_robot_pose (tuple, optional): Current robot pose (x, y, phi). Defaults to None.
+    """
+    ax.clear() # Clear the specific axes for fresh plotting
+
+    # Set fixed axis limits to keep the map stable
+    ax.set_xlim(plot_xlim)
+    ax.set_ylim(plot_ylim)
 
     # Plot all nodes on the course
-    x_all = [coord[0] for coord in graph_coords.values()]
-    y_all = [coord[1] for coord in graph_coords.values()]
-    plt.scatter(x_all, y_all, c='blue', label='Nodes')
+    x_all_nodes = [coord[0] for coord in graph_coordinates.values()]
+    y_all_nodes = [coord[1] for coord in graph_coordinates.values()]
+    ax.scatter(x_all_nodes, y_all_nodes, c='blue', s=50, zorder=5, label='Nodes')
 
-    # Label the nodes
-    for label, (x, y) in graph_coords.items():
-        plt.text(x, y, label)
+    # Label the nodes for clarity
+    for label, (x, y) in graph_coordinates.items():
+        ax.text(x + 0.01, y + 0.01, label, fontsize=9)
 
-    # Plot the initial path in green
+    # Plot the initial planned path in green
     if initial_path_coords:
         x_initial = [coord[0] for coord in initial_path_coords]
         y_initial = [coord[1] for coord in initial_path_coords]
-        plt.plot(x_initial, y_initial, 'g-', linewidth=2, label='Initial Route')
+        ax.plot(x_initial, y_initial, 'g--', linewidth=2, alpha=0.7, label='Initial Route')
 
-    # Plot the current route (re-calculated or remaining) in red
+    # Plot the current active route in red
     if current_route_coords:
         x_route = [coord[0] for coord in current_route_coords]
         y_route = [coord[1] for coord in current_route_coords]
         # Only plot in red if it's different from the initial path (i.e., a re-route)
         if current_route_coords != initial_path_coords:
-            plt.plot(x_route, y_route, 'r-', linewidth=2, label='Current Route (Re-routed)')
+            ax.plot(x_route, y_route, 'r-', linewidth=2, label='Current Route (Re-routed)')
         else:
-            # If the current route is still the initial one, it's covered by the green line.
-            pass # No need to plot again, as initial path is already green
+            # If the current route is still the initial one, plot it as solid green for emphasis
+            ax.plot(x_route, y_route, 'g-', linewidth=2, label='Current Route (Initial)')
 
-    # Plot blocked paths as crosses
-    for node1_label, node2_label in blocked_paths:
-        if node1_label in graph_coords and node2_label in graph_coords:
-            x1, y1 = graph_coords[node1_label]
-            y1 = graph_coords[node1_label][1]
-            x2, y2 = graph_coords[node2_label]
+    # Plot blocked path segments as crosses
+    for node1_label, node2_label in blocked_segments:
+        if node1_label in graph_coordinates and node2_label in graph_coordinates:
+            x1, y1 = graph_coordinates[node1_label]
+            x2, y2 = graph_coordinates[node2_label]
             mid_x = (x1 + x2) / 2
             mid_y = (y1 + y2) / 2
             # Plot a large 'x' at the midpoint of the blocked segment
-            plt.plot(mid_x, mid_y, 'kx', markersize=10, markeredgewidth=2, label='Blocked Path')
-            # Optionally, draw a faint dashed line for the blocked path
-            plt.plot([x1, x2], [y1, y2], 'k--', linewidth=1, alpha=0.5)
+            ax.plot(mid_x, mid_y, 'kx', markersize=12, markeredgewidth=3, zorder=10)
+            # Draw a faint dashed line for the blocked path
+            ax.plot([x1, x2], [y1, y2], 'k:', linewidth=1.5, alpha=0.6)
 
-    # Plot the current robot position
+    # Plot the current robot position and orientation
     if current_robot_pose:
-        rx, ry, rphi = current_robot_pose
-        plt.plot(rx, ry, 'o', color='black', markersize=8, label='Robot Position')
+        robot_x, robot_y, robot_phi = current_robot_pose
+        ax.plot(robot_x, robot_y, 'o', color='black', markersize=10, zorder=15, label='Robot Position')
         # Draw an arrow to indicate robot orientation
-        arrow_length = 0.05
-        plt.arrow(rx, ry, arrow_length * np.cos(rphi), arrow_length * np.sin(rphi),
-                  head_width=0.02, head_length=0.03, fc='black', ec='black')
+        arrow_length = 0.07
+        ax.arrow(robot_x, robot_y, arrow_length * np.cos(robot_phi), arrow_length * np.sin(robot_phi),
+                     head_width=0.03, head_length=0.04, fc='black', ec='black', zorder=15)
 
-    plt.title('Robot Route and Obstacles')
-    plt.xlabel('X position (m)')
-    plt.ylabel('Y position (m)')
-    plt.legend()
-    plt.axis('equal') # Keep aspect ratio equal
-    plt.grid(True)
-    plt.draw() # Use plt.draw() to update plot without blocking
+    ax.set_title('Robot Navigation Status', fontsize=14)
+    ax.set_xlabel('X position (m)', fontsize=12)
+    ax.set_ylabel('Y position (m)', fontsize=12)
+    ax.legend(loc='upper right')
+    ax.set_aspect('equal', adjustable='box') # Keep aspect ratio equal and adjust box
+    ax.grid(True)
+    fig.canvas.draw_idle() # Update plot without blocking for interactive figures
+    fig.canvas.flush_events() # Process events
     plt.pause(0.000001) # Smallest possible pause to allow GUI events to process
 
+# --- Path Planning and Navigation Control ---
 
-# --- Path planning ---
+# Define key nodes for the robot's mission
+SPAWN_NODE = 'K1'    # Initial spawn point of the robot
+START_MISSION_NODE = 'B2'  # First significant waypoint to reach for the main mission
+DESTINATION_NODE = 'E4'    # Final destination for the main mission
 
-# Define the full route as a sequence of nodes based on your combined path logic
-Spawn_NODE = 'K1'      # Startpositie robot
-Start_NODE = 'B2'      # Eerste tussenpunt (bijvoorbeeld kruising)
-DEST_NODE  = 'E4'     # Eindpositie
-
-# List to store blocked paths (tuples of (node1, node2))
+# List to store dynamically blocked path segments
 blocked_paths = []
 
-# Function to find the nearest node to the robot's current position (not directly used for re-planning but useful for debugging/understanding)
-def find_nearest_node(robot_x, robot_y, coordinates_map):
-    min_dist = float('inf')
-    nearest_node = None
-    for node, (nx, ny) in coordinates_map.items():
-        dist = distance_to_point(robot_x, robot_y, nx, ny)
-        if dist < min_dist:
-            min_dist = dist
-            nearest_node = node
-    return nearest_node
-
-# Nodes where obstacles should be ignored
+# Nodes where obstacle detection should be temporarily ignored (e.g., at start/end zones)
 IGNORE_OBSTACLE_NODES = ['E1', 'E2', 'E3', 'E4', 'B1', 'B2', 'B3', 'B4']
-IGNORE_ZONE_RADIUS = 0.1 # A small radius around the ignore nodes to define the zone
+IGNORE_ZONE_RADIUS = 0.1 # Radius around ignore nodes to define the "ignore zone"
 
-# --- Initial path calculation based on the full route ---
-path_labels = []
+# --- Initial Path Calculation ---
+initial_path_labels = []
 
-# Calculate initial path from Spawn_NODE to Start_NODE
-_, path1 = dijkstra(GRAPH, Spawn_NODE, Start_NODE)
+# Calculate the initial path from the robot's spawn to the mission start node
+_, path_to_start = dijkstra(GRAPH, SPAWN_NODE, START_MISSION_NODE)
 
-# Calculate initial path from Start_NODE to DEST_NODE
-_, path2 = dijkstra(GRAPH, Start_NODE, DEST_NODE)
+# Calculate the initial path from the mission start node to the final destination
+_, path_to_destination = dijkstra(GRAPH, START_MISSION_NODE, DESTINATION_NODE)
 
-# Combine both paths to one route (remove duplicate middle node)
-if path1 and path2:
-    path_labels = path1 + path2[1:]  # Avoid duplicate Start_NODE
-    print(f"Initial planned route: {path_labels}")
+# Combine both paths to form the complete initial route (avoiding duplicate middle node)
+if path_to_start and path_to_destination:
+    # Use START_MISSION_NODE as the common point to merge
+    initial_path_labels = path_to_start + path_to_destination[1:]
+    print(f"Initial planned route: {initial_path_labels}")
 else:
-    print("No complete path found based on the defined FULL_ROUTE_NODES.")
-    path_labels = [] # fallback empty route
+    print("Error: No complete initial path found for the mission.")
+    initial_path_labels = [] # Fallback to an empty route
 
-if not path_labels:
-    initial_path_coords = [] # fallback empty route
-    route_coords = []
+# Convert node labels to coordinates for plotting
+if not initial_path_labels:
+    initial_path_coordinates = []
+    current_route_coordinates = []
 else:
-    initial_path_coords = [COORDINATES[label] for label in path_labels]
-    route_coords = initial_path_coords[:] # Current route starts as the initial one
+    initial_path_coordinates = [COORDINATES[label] for label in initial_path_labels]
+    current_route_coordinates = initial_path_coordinates[:] # Current active route starts as the initial one
 
-# Initial robot pose: Set to the first node of the planned route
-if path_labels:
-    x, y = COORDINATES[path_labels[0]]
+# Set initial robot pose based on the first node of the planned route
+if initial_path_labels:
+    robot_x, robot_y = COORDINATES[initial_path_labels[0]]
 else:
-    # Fallback if no path is found, or set to a default starting point
-    x = 0.195
-    y = -0.250
-phi = 1.5708 # Initial orientation
+    # Fallback to a default starting point if no path is found
+    robot_x = 0.195
+    robot_y = -0.250
+robot_orientation = np.pi / 2 # Initial orientation (e.g., facing positive Y)
 
-current_wp_index = 0
-DIST_THRESHOLD = 0.005
-ANGLE_THRESHOLD = 0.02
-OBSTACLE_DISTANCE_THRESHOLD = 100 # Adjust this based on your sensor range and robot speed
+current_waypoint_index = 0
+DISTANCE_THRESHOLD = 0.005  # Distance to target waypoint to consider it reached
+ANGLE_THRESHOLD = 0.02    # Angular difference to target direction to start moving forward
+OBSTACLE_DETECTION_THRESHOLD = 100 # Proximity sensor reading threshold for obstacle detection
 
-current_state = 'stop'
-# Initialize last_known_node to the first node of the path, or SOURCE_NODE if you prefer
-last_known_node = path_labels[0] if path_labels else None 
+current_robot_state = 'stop' # Initial state of the robot
 
-# --- NEW: Control plotting and printing frequency ---
-PLOT_AND_PRINT_INTERVAL = 20 # Only update plot and print every 20 simulation steps
-step_counter = 0
+# Initialize last_known_node to the first node of the path to enable re-planning from a valid point
+last_known_node = initial_path_labels[0] if initial_path_labels else None
 
-# --- Main simulation loop ---
+# --- Simulation Loop Control ---
+PLOT_AND_PRINT_INTERVAL = 20 # Update plot and print messages every N simulation steps
+step_counter = 0 # Counter for simulation steps
+
+# State variables to track the robot's mission progress
+mission_to_destination_completed = False # True when robot reaches DESTINATION_NODE
+returning_to_spawn = False                # True when robot is on its way back to SPAWN_NODE
+
+# --- Main Simulation Loop ---
 while robot.step(timestep) != -1:
-    step_counter += 1 # Increment counter every step
+    step_counter += 1
 
     # Read sensor values
-    gsValues = [gs[i].getValue() for i in range(3)]
-    psValues = [ps[i].getValue() for i in range(8)]
-    encoderValues = [encoder[i].getValue() for i in range(2)]
+    ground_sensor_values = [gs_sensor.getValue() for gs_sensor in ground_sensors]
+    proximity_sensor_values = [ps_sensor.getValue() for ps_sensor in proximity_sensors]
+    current_encoder_values = [encoder.getValue() for encoder in wheel_encoders]
         
-    if len(oldEncoderValues) < 2:
-        oldEncoderValues = encoderValues.copy()
+    # Initialize previous_encoder_values on the first step
+    if not previous_encoder_values:
+        previous_encoder_values = current_encoder_values.copy()
 
-    # Update robot pose
-    wl, wr = get_wheels_speed(encoderValues, oldEncoderValues, delta_t)
-    u, w = get_robot_speeds(wl, wr, R, D)
-    x, y, phi = get_robot_pose(u, w, x, y, phi, delta_t)
+    # Update robot pose (odometry)
+    left_wheel_speed_rad_s, right_wheel_speed_rad_s = get_wheel_speeds(current_encoder_values, previous_encoder_values, delta_t)
+    robot_linear_velocity, robot_angular_velocity = get_robot_velocities(left_wheel_speed_rad_s, right_wheel_speed_rad_s, ROBOT_WHEEL_RADIUS, ROBOT_AXLE_LENGTH)
+    robot_x, robot_y, robot_orientation = update_robot_pose(robot_linear_velocity, robot_angular_velocity, robot_x, robot_y, robot_orientation, delta_t)
 
-    # Check if the robot is currently in an "ignore obstacle" zone
+    # Check if the robot is currently within an "ignore obstacle" zone
     in_ignore_zone = False
     for node_label in IGNORE_OBSTACLE_NODES:
         node_x, node_y = COORDINATES[node_label]
-        if distance_to_point(x, y, node_x, node_y) < IGNORE_ZONE_RADIUS:
+        if calculate_distance(robot_x, robot_y, node_x, node_y) < IGNORE_ZONE_RADIUS:
             in_ignore_zone = True
             break
 
-    # Obstacle detection (front sensors ps0, ps7)
-    front_obstacle_detected = psValues[0] > OBSTACLE_DISTANCE_THRESHOLD or psValues[7] > OBSTACLE_DISTANCE_THRESHOLD
+    # Obstacle detection using front proximity sensors (ps0 and ps7)
+    front_obstacle_detected = proximity_sensor_values[0] > OBSTACLE_DETECTION_THRESHOLD or \
+                              proximity_sensor_values[7] > OBSTACLE_DETECTION_THRESHOLD
 
-    # Obstacle avoidance logic
-    if front_obstacle_detected and not in_ignore_zone and current_state != 'obstacle_avoidance':
-        if step_counter % PLOT_AND_PRINT_INTERVAL == 0: # Only print when updating visuals
-            print("Obstacle detected! Going back to last node and recalculating path.")
-        current_state = 'obstacle_avoidance'
-        leftMotor.setVelocity(0.0)
-        rightMotor.setVelocity(0.0)
+    # --- Obstacle Avoidance Logic ---
+    if front_obstacle_detected and not in_ignore_zone and current_robot_state != 'obstacle_avoidance':
+        if step_counter % PLOT_AND_PRINT_INTERVAL == 0:
+            print("Obstacle detected! Halting and recalculating path.")
+        current_robot_state = 'obstacle_avoidance'
+        left_motor.setVelocity(0.0)
+        right_motor.setVelocity(0.0)
 
-        # Mark the current segment as blocked
-        if path_labels and current_wp_index < len(path_labels): 
-            # The segment that was intended to be traversed is (last_known_node, next_waypoint_label)
-            if current_wp_index > 0:
-                blocked_node_1 = path_labels[current_wp_index - 1]
-            else: # If we are at the very beginning of the path
-                blocked_node_1 = path_labels[0] # Consider the first node as the origin of the current segment
+        # Mark the current segment as blocked if robot was moving towards a waypoint.
+        # The segment to block is from 'last_known_node' to the 'current_target_waypoint'.
+        
+        current_target_waypoint_coord = None
+        current_target_waypoint_label = None
 
-            blocked_node_2 = path_labels[current_wp_index]
+        if current_route_coordinates and current_waypoint_index < len(current_route_coordinates):
+            current_target_waypoint_coord = current_route_coordinates[current_waypoint_index]
+            # Find the node label corresponding to the current target waypoint's coordinates
+            for label, coord in COORDINATES.items():
+                if coord == current_target_waypoint_coord:
+                    current_target_waypoint_label = label
+                    break
+        
+        if last_known_node and current_target_waypoint_label:
+            blocked_node_1 = last_known_node
+            blocked_node_2 = current_target_waypoint_label
             
             # Add to blocked_paths, checking both directions for robustness
             if (blocked_node_1, blocked_node_2) not in blocked_paths and \
                (blocked_node_2, blocked_node_1) not in blocked_paths:
                 blocked_paths.append((blocked_node_1, blocked_node_2))
-            if step_counter % PLOT_AND_PRINT_INTERVAL == 0: # Only print when updating visuals
-                print(f"Blocked path: {blocked_node_1} <-> {blocked_node_2}")
-
-        # Recalculate path from the last known good node to the overall DEST_NODE.
-        if last_known_node and last_known_node in GRAPH: # Ensure last_known_node is valid
-            recalc_start_node = last_known_node
-            overall_dest_node = DEST_NODE # The very last node in the desired route
-            
-            afst, path_labels = dijkstra(GRAPH, recalc_start_node, overall_dest_node, blocked_paths)
-            
-            if not path_labels or path_labels[0] != recalc_start_node:
-                if step_counter % PLOT_AND_PRINT_INTERVAL == 0: # Only print when updating visuals
-                    print("No new path found or path doesn't start from the correct node. Robot is stuck.")
-                current_state = 'stop' # Remain stopped if no new path
-                route_coords = []
-            else:
-                if step_counter % PLOT_AND_PRINT_INTERVAL == 0: # Only print when updating visuals
-                    print(f"New path found from {recalc_start_node}: {path_labels} (distance: {afst})")
-                route_coords = [COORDINATES[label] for label in path_labels]
-                current_wp_index = 0 # Reset waypoint index for the new path
-                current_state = 'forward' # Resume forward movement after recalculation
+                if step_counter % PLOT_AND_PRINT_INTERVAL == 0:
+                    print(f"Blocked path segment: {blocked_node_1} <-> {blocked_node_2}")
         else:
             if step_counter % PLOT_AND_PRINT_INTERVAL == 0:
-                print("Robot is unable to determine a starting point for path recalculation. Stuck.")
-            current_state = 'stop'
-            route_coords = []
+                print("Could not determine segment to block (last_known_node or target waypoint missing).")
 
+        # Recalculate path from the last known good node to the overall destination
+        if last_known_node and last_known_node in GRAPH:
+            recalc_start_node = last_known_node
+            
+            # Determine the correct overall destination for recalculation
+            overall_mission_destination = SPAWN_NODE if returning_to_spawn else DESTINATION_NODE
 
-    elif current_state == 'obstacle_avoidance' and (not front_obstacle_detected or in_ignore_zone):
-        # If obstacle is gone OR we've entered an ignore zone, resume normal navigation
-        if step_counter % PLOT_AND_PRINT_INTERVAL == 0: # Only print when updating visuals
-            if in_ignore_zone:
-                print("Entered ignore zone, resuming navigation.")
-            elif not front_obstacle_detected:
-                print("Obstacle cleared, resuming navigation.")
-        current_state = 'forward'
-        
-    # Normal navigation logic (only if not in obstacle avoidance)
-    if current_state != 'obstacle_avoidance':
-        if route_coords and current_wp_index < len(route_coords):
-            target_x, target_y = route_coords[current_wp_index]
-            dist = distance_to_point(x, y, target_x, target_y)
-            ang_diff = angle_diff_to_point(x, y, phi, target_x, target_y)
-
-            if dist < DIST_THRESHOLD:
-                # Update last_known_node when a waypoint is reached successfully
-                if current_wp_index < len(path_labels): # Ensure index is valid for path_labels
-                    last_known_node = path_labels[current_wp_index]
-                current_wp_index += 1
-                if current_wp_index >= len(route_coords):
-                    current_state = 'stop'
-                else:
-                    current_state = 'forward'
+            distance_to_dest, new_path_labels = dijkstra(GRAPH, recalc_start_node, overall_mission_destination, blocked_paths)
+            
+            if not new_path_labels or new_path_labels[0] != recalc_start_node:
+                if step_counter % PLOT_AND_PRINT_INTERVAL == 0:
+                    print("No new path found or path doesn't start from the correct node. Robot is stuck.")
+                current_robot_state = 'stop' # Remain stopped if no new path
+                current_route_coordinates = []
             else:
-                if abs(ang_diff) > ANGLE_THRESHOLD:
-                    if ang_diff > 0:
-                        current_state = 'turn_left'
-                    else:
-                        current_state = 'turn_right'
-                else:
-                    current_state = 'forward'
+                if step_counter % PLOT_AND_PRINT_INTERVAL == 0:
+                    print(f"New path found from {recalc_start_node}: {new_path_labels} (Distance: {distance_to_dest:.2f} m)")
+                current_route_coordinates = [COORDINATES[label] for label in new_path_labels]
+                current_waypoint_index = 0 # Reset waypoint index for the new path
+                current_robot_state = 'forward' # Resume forward movement after successful recalculation
         else:
-            current_state = 'stop'
+            if step_counter % PLOT_AND_PRINT_INTERVAL == 0:
+                print("Robot unable to determine a valid starting point for path recalculation. Stuck.")
+            current_robot_state = 'stop'
+            current_route_coordinates = []
 
-    # Set motor speeds based on current state
-    if current_state == 'forward':
-        leftSpeed = speed
-        rightSpeed = speed
-    elif current_state == 'turn_right':
-        leftSpeed = 0.5 * speed
-        rightSpeed = -0.5 * speed
-    elif current_state == 'turn_left':
-        leftSpeed = -0.5 * speed
-        rightSpeed = 0.5 * speed
-    elif current_state == 'stop' or current_state == 'obstacle_avoidance':
-        leftSpeed = 0.0
-        rightSpeed = 0.0
-        
-    leftMotor.setVelocity(leftSpeed)
-    rightMotor.setVelocity(rightSpeed)
+    # Resume navigation if obstacle clears or robot enters ignore zone
+    elif current_robot_state == 'obstacle_avoidance' and (not front_obstacle_detected or in_ignore_zone):
+        if step_counter % PLOT_AND_PRINT_INTERVAL == 0:
+            print(f"Obstacle {'cleared' if not front_obstacle_detected else 'ignored (in zone)'}, resuming navigation.")
+        current_robot_state = 'forward'
+            
+    # --- Normal Navigation Logic (Waypoint Following) ---
+    if current_robot_state != 'obstacle_avoidance':
+        if current_route_coordinates and current_waypoint_index < len(current_route_coordinates):
+            target_x, target_y = current_route_coordinates[current_waypoint_index]
+            dist_to_target = calculate_distance(robot_x, robot_y, target_x, target_y)
+            angle_to_target = angle_to_point(robot_x, robot_y, robot_orientation, target_x, target_y)
 
-    oldEncoderValues = encoderValues.copy()
+            if dist_to_target < DISTANCE_THRESHOLD:
+                # Waypoint reached, move to the next
+                # Update last_known_node only when a waypoint is successfully reached
+                if current_waypoint_index < len(current_route_coordinates): 
+                    # Get the label of the recently reached waypoint
+                    reached_waypoint_coord = current_route_coordinates[current_waypoint_index]
+                    for label, coord in COORDINATES.items():
+                        if coord == reached_waypoint_coord:
+                            last_known_node = label
+                            break
+                current_waypoint_index += 1
+                
+                # Check if the current mission segment (to DESTINATION_NODE or SPAWN_NODE) is complete
+                if current_waypoint_index >= len(current_route_coordinates):
+                    if not mission_to_destination_completed:
+                        # Robot has reached DESTINATION_NODE, now plan path back to SPAWN_NODE
+                        mission_to_destination_completed = True
+                        returning_to_spawn = True
+                        current_robot_state = 'stop' # Temporarily stop to plan return
+                        
+                        if step_counter % PLOT_AND_PRINT_INTERVAL == 0:
+                            print(f"Reached DESTINATION_NODE: {DESTINATION_NODE}. Planning return to SPAWN_NODE: {SPAWN_NODE}")
+                        
+                        # Recalculate path from DESTINATION_NODE back to SPAWN_NODE
+                        _, new_path_labels = dijkstra(GRAPH, DESTINATION_NODE, SPAWN_NODE, blocked_paths)
+                        if new_path_labels:
+                            current_route_coordinates = [COORDINATES[label] for label in new_path_labels]
+                            current_waypoint_index = 0
+                            # Update last_known_node for the start of the return path
+                            if new_path_labels:
+                                last_known_node = new_path_labels[0] 
+                            current_robot_state = 'forward'
+                            if step_counter % PLOT_AND_PRINT_INTERVAL == 0:
+                                print(f"Return path planned: {new_path_labels}")
+                        else:
+                            if step_counter % PLOT_AND_PRINT_INTERVAL == 0:
+                                print("Could not find a return path to spawn. Robot stuck.")
+                            current_robot_state = 'stop'
+                            
+                    elif returning_to_spawn:
+                        # Robot has successfully returned to SPAWN_NODE
+                        current_robot_state = 'stop'
+                        if step_counter % PLOT_AND_PRINT_INTERVAL == 0:
+                            print(f"Successfully returned to SPAWN_NODE: {SPAWN_NODE}. Mission complete.")
+                        
+                        # Plot the final route one last time before exiting
+                        plot_navigation_status(COORDINATES, initial_path_coordinates, current_route_coordinates, blocked_paths, (robot_x, robot_y, robot_orientation))
+                        time.sleep(5) # Pause simulation for final view
+                        break # Exit the main loop as mission is fully complete
+                else:
+                    current_robot_state = 'forward' # Continue moving to the next waypoint
+            else:
+                # Determine turn or go forward based on angle to target
+                if abs(angle_to_target) > ANGLE_THRESHOLD:
+                    if angle_to_target > 0:
+                        current_robot_state = 'turn_left'
+                    else:
+                        current_robot_state = 'turn_right'
+                else:
+                    current_robot_state = 'forward' # Head towards target if alignment is good
+        else:
+            current_robot_state = 'stop' # No path or all waypoints reached
 
-    # --- Plotting and Printing - now conditional ---
+    # Set motor speeds based on the determined state
+    left_motor_speed = 0.0
+    right_motor_speed = 0.0
+
+    if current_robot_state == 'forward':
+        left_motor_speed = DEFAULT_SPEED_FACTOR * MAX_SPEED
+        right_motor_speed = DEFAULT_SPEED_FACTOR * MAX_SPEED
+    elif current_robot_state == 'turn_right':
+        left_motor_speed = 0.5 * DEFAULT_SPEED_FACTOR * MAX_SPEED
+        right_motor_speed = -0.5 * DEFAULT_SPEED_FACTOR * MAX_SPEED
+    elif current_robot_state == 'turn_left':
+        left_motor_speed = -0.5 * DEFAULT_SPEED_FACTOR * MAX_SPEED
+        right_motor_speed = 0.5 * DEFAULT_SPEED_FACTOR * MAX_SPEED
+    elif current_robot_state in ['stop', 'obstacle_avoidance']:
+        left_motor_speed = 0.0
+        right_motor_speed = 0.0
+            
+    left_motor.setVelocity(left_motor_speed)
+    right_motor.setVelocity(right_motor_speed)
+
+    # Store current encoder values for the next step's odometry calculation
+    previous_encoder_values = current_encoder_values.copy()
+
+    # --- Conditional Plotting and Printing ---
     if step_counter % PLOT_AND_PRINT_INTERVAL == 0:
-        current_robot_pose = (x, y, phi)
-        # Pass both initial and current route coordinates
-        plot_route(COORDINATES, initial_path_coords, route_coords, blocked_paths, current_robot_pose)
+        current_robot_pose_for_plot = (robot_x, robot_y, robot_orientation)
+        plot_navigation_status(COORDINATES, initial_path_coordinates, current_route_coordinates, blocked_paths, current_robot_pose_for_plot)
 
-        if route_coords and current_wp_index < len(route_coords) and current_state != 'obstacle_avoidance':
-            print(f"Pose: x={x:.3f} y={y:.3f} phi={phi:.3f} rad, State: {current_state}")
-            print(f"Current Target Waypoint: {path_labels[current_wp_index]} ({current_wp_index+1}/{len(route_coords)})")
-            print(f"Last Known Node: {last_known_node}")
-        elif route_coords and current_wp_index >= len(route_coords) and current_state != 'obstacle_avoidance':
-            print(f"Arrived at desired waypoint")
-            print(f"Pose: x={x:.3f} y={y:.3f} phi={phi:.3f} rad, State: Finished")
-            
-            # Plot the final route one last time
-            plot_route(COORDINATES, initial_path_coords, route_coords, blocked_paths, current_robot_pose)
-            
-            time.sleep(5) # This will pause the simulation, which might not be desired for speed
-            break
-        elif current_state == 'obstacle_avoidance':
-            print(f"Pose: x={x:.3f} y={y:.3f} phi={phi:.3f} rad, State: {current_state} - Obstacle in front! (Ignore Zone: {in_ignore_zone})")
+        # Print detailed status updates
+        if current_route_coordinates and current_waypoint_index < len(current_route_coordinates) and current_robot_state != 'obstacle_avoidance':
+            # Safely get target node label if path_labels exist and index is valid
+            target_node_label = "N/A"
+            if initial_path_labels and current_waypoint_index < len(initial_path_labels):
+                 target_node_label = initial_path_labels[current_waypoint_index]
+            elif current_waypoint_index < len(current_route_coordinates): # For re-routed paths
+                 target_waypoint_coord = current_route_coordinates[current_waypoint_index]
+                 for label, coord in COORDINATES.items():
+                    if coord == target_waypoint_coord:
+                        target_node_label = label
+                        break
+
+            print(f"Pose: X={robot_x:.3f} Y={robot_y:.3f} Phi={np.degrees(robot_orientation):.1f}° | State: {current_robot_state}")
+            print(f"Target Waypoint: {target_node_label} ({current_waypoint_index + 1}/{len(current_route_coordinates)}) | Last Known Node: {last_known_node}")
+        elif current_waypoint_index >= len(current_route_coordinates) and current_robot_state != 'obstacle_avoidance':
+            if not mission_to_destination_completed:
+                print(f"Arrived at DESTINATION_NODE: {DESTINATION_NODE}")
+            elif returning_to_spawn:
+                print(f"Arrived at SPAWN_NODE: {SPAWN_NODE}. Mission complete.")
+                print(f"Final Pose: X={robot_x:.3f} Y={robot_y:.3f} Phi={np.degrees(robot_orientation):.1f}°")
+        elif current_robot_state == 'obstacle_avoidance':
+            print(f"Pose: X={robot_x:.3f} Y={robot_y:.3f} Phi={np.degrees(robot_orientation):.1f}° | State: {current_robot_state} (Obstacle! In Ignore Zone: {in_ignore_zone})")
             print(f"Last Known Node for Recalculation: {last_known_node}")
-
-    # Break condition for completed path (moved outside conditional print block)
-    if route_coords and current_wp_index >= len(route_coords) and current_state != 'obstacle_avoidance' and step_counter % PLOT_AND_PRINT_INTERVAL != 0:
-        time.sleep(5) # Still pauses for 5 seconds on completion
-        break
