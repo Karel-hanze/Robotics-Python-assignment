@@ -46,7 +46,7 @@ DEF E_PUCK E-puck {
   ]
 }
 WoodenBox {
-  translation 0 -0.1 0.04
+  translation 0 0.01 0.04
   size 0.1 0.1 0.1
   mass 10
 }

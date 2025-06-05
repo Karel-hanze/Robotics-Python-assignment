@@ -140,7 +140,7 @@ right_motor.setVelocity(0.0)
 
 # Robot physical parameters
 ROBOT_WHEEL_RADIUS = 0.020  # meters
-ROBOT_AXLE_LENGTH = 0.057   # meters (distance between wheels)
+ROBOT_AXLE_LENGTH = 0.057    # meters (distance between wheels)
 
 # Define precise coordinates for each node in the graph for plotting and navigation
 COORDINATES = {
@@ -547,6 +547,10 @@ while robot.step(timestep) != -1:
                         if step_counter % PLOT_AND_PRINT_INTERVAL == 0:
                             print(f"Successfully returned to SPAWN_NODE: {SPAWN_NODE}. Mission complete.")
                         
+                        # **Crucially, stop the motors here.**
+                        left_motor.setVelocity(0.0)
+                        right_motor.setVelocity(0.0)
+
                         # Plot the final route one last time before exiting
                         plot_navigation_status(COORDINATES, initial_path_coordinates, current_route_coordinates, blocked_paths, (robot_x, robot_y, robot_orientation))
                         time.sleep(5) # Pause simulation for final view
