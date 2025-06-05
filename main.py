@@ -1,140 +1,220 @@
-# main.py for ESP32 MicroPython
-
 # Implements communication with Webots via Serial over USB.
-# The ESP32 now acts solely as a sensor reporter.
-# All motor control is handled directly by Webots for the simulated robot.
+# Met geïntegreerd Dijkstra's algoritme voor kortste-pad-berekening.
+# Werkt met de "line_following_with_HIL" controller in Webots.
 
-# Tested with MicroPython v1.25.0 on ESP32 WROOM 32 dev kit board
-# communicating with Webots R2023a, on Windows 11 running Python 3.10.5 64-bit
+# Getest met MicroPython v1.25.0 op ESP32 WROOM 32 dev kit board
+# Webots R2023a, Windows 11 met Python 3.10.5 64‐bit
 
-# Author: Felipe N. Martins
-# Date: 05 June 2025
-# Last update: 05 June 2025 (ESP32 is sensor-only, no motor control, no state sending)
-
-
-###### IMPORTANT: Close Thonny after starting this code! #######
-# This is necessary because the serial port cannot be used by
-# two different programs (Thonny and Webots) at the same time.
-
-
-from machine import Pin
+from machine import Pin, UART
 from time import sleep
-from sys import stdin, stdout
 
+########### 1) GPIO & UART‐setup zoals voorheen ###########
 
-# --- Hardware Definitions ---
-# Define ESP32 onboard LED (often GPIO2, check your board)
-led_board = Pin(2, Pin.OUT)
-# Define external LEDs (if connected), adjust pins as needed
-# These can still be used to visualize sensor states on the physical ESP32
+led_board  = Pin(2, Pin.OUT)     # Onboard LED ESP32
 led_yellow = Pin(4, Pin.OUT)
-led_blue = Pin(23, Pin.OUT)
-led_green = Pin(22, Pin.OUT)
-led_red = Pin(21, Pin.OUT)
+led_blue   = Pin(23, Pin.OUT)
+led_green  = Pin(22, Pin.OUT)
+led_red    = Pin(21, Pin.OUT)
+button_left  = Pin(34, Pin.IN, Pin.PULL_DOWN)
+button_right = Pin(35, Pin.IN, Pin.PULL_DOWN)
 
-# Define buttons (check your board's pins for onboard buttons, or your wiring for external)
-button_left = Pin(34, Pin.IN, Pin.PULL_DOWN) # Use this as the "START" button
-button_right = Pin(35, Pin.IN, Pin.PULL_DOWN) # Use this as the "STOP" button
-
-# --- NO MOTOR CONTROL SETUP ---
-# All motor related pin definitions, PWM setup, and set_motor_speed function are REMOVED.
-
-
-# --- Initialization Sequence (Waiting for Button Press) ---
-print("ESP32: Ready. Press the START button (left button) to signal Webots.")
-print("Once pressed, close Thonny and run the Webots simulation.")
-print("You can also press the STOP button (right button) at any time to exit.")
-
-while button_left.value() == False:
+# Wacht op linker knop vóór switch naar UART1
+print("Klik op de linkerknoop op de ESP32 om te beginnen.")
+print("Sluit daarna Thonny af en start de Webots‐simulatie.")
+print("Of klik STOP in Thonny om terug te gaan naar de REPL.")
+while not button_left():
     sleep(0.25)
-    led_board.value(not led_board.value())
+    led_board.value(not led_board())
 
-print("ESP32: START button pressed! Signaling Webots and entering main loop.")
-sleep(0.1)
+# Zet UART1 op (zelfde pins als UART0) om via USB met Webots te communiceren
+uart = UART(1, 115200, tx=1, rx=3)
 
-# --- Handshake: Signal Webots that ESP32 is ready ---
-stdout.write(b'ESP32_READY\n')
-print("ESP32: 'ESP32_READY' signal sent to Webots.")
-sleep(0.5) # Give Webots a moment to receive this
+########### 2) DEFINITIE VAN DE GRAPH & DIJKSTRA ###########
 
-# --- Global buffer for incoming serial data (though not expecting motor commands now) ---
-received_line_buffer = ""
+GRAPH = {
+    'B1': {'K1': 0.1},
+    'B2': {'K2': 0.1},
+    'B3': {'K3': 0.1},
+    'B4': {'K4': 0.1},
+    'M1': {'K1': 0.195, 'M2': 0.5, 'M4': 0.15},
+    'M2': {'M1': 0.5, 'M3': 0.15},
+    'M3': {'M2': 0.15, 'M4': 0.5, 'M7': 0.1},
+    'M4': {'M1': 0.15, 'M3': 0.5, 'M6': 0.1},
+    'M5': {'K4': 0.25, 'M6': 0.5, 'M9': 0.1},
+    'M6': {'M4': 0.1, 'M5': 0.5, 'M7': 0.5, 'M8': 0.1},
+    'M7': {'K5': 0.25, 'M3': 0.1, 'M6': 0.5},
+    'M8': {'M6': 0.1, 'M9': 0.5, 'M11': 0.15},
+    'M9': {'M5': 0.1, 'M8': 0.5, 'M10': 0.15},
+    'M10': {'M9': 0.15, 'M11': 0.5},
+    'M11': {'K8': 0.195, 'M8': 0.15, 'M10': 0.5},
+    'K1': {'K2': 0.1, 'M1': 0.195, 'B1': 0.1},
+    'K2': {'K1': 0.1, 'K3': 0.1, 'B2': 0.1},
+    'K3': {'K2': 0.1, 'K4': 0.1, 'B3': 0.1},
+    'K4': {'K3': 0.1, 'M5': 0.25, 'B4': 0.1},
+    'K5': {'K6': 0.1, 'M7': 0.25, 'E1': 0.1},
+    'K6': {'K5': 0.1, 'K7': 0.1, 'E2': 0.1},
+    'K7': {'K6': 0.1, 'K8': 0.1, 'E3': 0.1},
+    'K8': {'K7': 0.1, 'M11': 0.195, 'E4': 0.1},
+    'E1': {'K5': 0.1},
+    'E2': {'K6': 0.1},
+    'E3': {'K7': 0.1},
+    'E4': {'K8': 0.1}
+}
 
-# --- Main Loop: Continuously Read, Send Sensor Data ---
+def dijkstra(graph, start, goal):
+    """
+    Bereken kortste pad van start naar goal in graph.
+    graph is een dict van dicts: graph[node][neighbor] = gewicht.
+    Retourneert: (afstand, lijst_van_knooppunten_in_pad)
+    """
+    # Init-structuren
+    unvisited = set(graph.keys())
+    # afstand[n] = voorlopig kortsteberekende afstand van start tot n
+    afstand = {node: float('inf') for node in graph}
+    afstand[start] = 0
+    # parent[n] = voorgaand knooppunt op weg naar n
+    parent = {node: None for node in graph}
+
+    while unvisited:
+        # Kies onbezochte met kleinste afstand
+        huidige = min(unvisited, key=lambda node: afstand[node])
+        if afstand[huidige] == float('inf'):
+            break  # onbereikbare knooppunten
+        unvisited.remove(huidige)
+
+        if huidige == goal:
+            break  # we hebben de bestemming bereikt
+
+        # Relax alle buren
+        for buur, gewicht in graph[huidige].items():
+            new_dist = afstand[huidige] + gewicht
+            if new_dist < afstand[buur]:
+                afstand[buur] = new_dist
+                parent[buur] = huidige
+
+    # Bouw het pad op door parent‐pointer terug te volgen
+    pad = []
+    node = goal
+    if parent[node] is not None or node == start:
+        while node is not None:
+            pad.insert(0, node)
+            node = parent[node]
+    return afstand[goal], pad
+
+########### 3) UITVOER KORTSTE PAD VOORAF ###########
+
+# Stel begin‐ en eindknooppunt in
+SOURCE_NODE = 'B1'
+DEST_NODE   = 'E1'
+
+# Reken het kortste pad uit
+afst, pad = dijkstra(GRAPH, SOURCE_NODE, DEST_NODE)
+
+if pad:
+    print("Kortste pad van", SOURCE_NODE, "naar", DEST_NODE, "is:")
+    print("->".join(pad), "(afstand:", afst, ")")
+    # Voorbeeld: stuur het pad als comma‐gescheiden string naar Webots
+    uart.write("PATH:" + ",".join(pad) + "\n")
+    
+else:
+    print("Geen pad gevonden van", SOURCE_NODE, "naar", DEST_NODE)
+    
+
+########### 4) Bestaande LINE‐FOLLOWING STATE‐MACHINE ###########
+
+# Sensorstatus (wordt geüpdatet door Webots via serial)
+line_left   = False
+line_center = False
+line_right  = False
+
+# State‐machine variabelen
+current_state = 'forward'
+counter       = 0
+COUNTER_MAX   = 5
+COUNTER_STOP  = 50
+state_updated = True
+
 while True:
+    ##################   See: Lees sensors via serial ###################
+    if uart.any():
+        msg_bytes = uart.read()              # Lees alle binnengekomen bytes
+        msg_str   = msg_bytes.decode('utf-8') # Zet om naar string
 
-    # Check for STOP button press at any time
-    if button_right.value() == True:
-        print("ESP32: STOP button pressed! Exiting main loop and returning to REPL.")
-        sleep(0.1)
-        led_board.value(0) # Turn off all LEDs on exit
-        led_yellow.value(0)
-        led_blue.value(0)
-        led_green.value(0)
-        led_red.value(0)
-        break
+        # We nemen aan dat Webots achteraan een string stuurt met 3 cijfers:
+        #   ...XYZ\n  waarbij X=waarde line_left, Y=waarde line_center, Z=waarde line_right
+        # Controleer de laatste karakters (voorafgegaan door eventuele "\r\n")
+        msg_str = msg_str.strip()  # knip newline/whitespace weg
+        if msg_str == "Request Path":
+            path_str = "PATH:" + ",".join(pad) + "\n"
+            uart.write(path_str.encode('utf-8'))
 
-    # --- Read Sensor Data (Assuming actual line sensors are connected to these pins) ---
-    # These GPIOs would be connected to the output of your line sensors.
-    # Adjust pin numbers based on your actual wiring.
-    # For a direct translation of Webots' `gsValues > 600` logic:
-    # Let's assume typical reflectance sensors where HIGH means 'dark' (on line).
-    # You might need to invert this logic based on your sensor's output (active high/low).
-    # For now, mimicking the '1' for line detected.
-    
-    # Placeholder for actual sensor readings. You'll need to define how your
-    # physical line sensors are read (e.g., analog to digital conversion, or digital input).
-    # If using digital line sensors:
-    # line_left_pin = Pin(36, Pin.IN) # Example digital pin for left sensor
-    # line_center_pin = Pin(39, Pin.IN) # Example digital pin for center sensor
-    # line_right_pin = Pin(34, Pin.IN) # Example digital pin for right sensor (re-using for example)
+        # Bescherm tegen lege of onverwachte berichten
+        if len(msg_str) >= 3:
+            # Interpretatie: laatste 3 chars zijn '101', '010', etc.
+            # line_left  = True als voorlaatste vierde char == '1'
+            if msg_str[-3] == '1':
+                line_left = True
+                led_blue.on()
+            else:
+                line_left = False
+                led_blue.off()
+            if msg_str[-2] == '1':
+                line_center = True
+                led_green.on()
+            else:
+                line_center = False
+                led_green.off()
+            if msg_str[-1] == '1':
+                line_right = True
+                led_red.on()
+            else:
+                line_right = False
+                led_red.off()
 
-    # For the purpose of this example, assuming line_left, line_center, line_right
-    # would be determined by *your* physical sensor reading code here.
-    # Since we removed motor control, we don't *need* to update these on ESP32,
-    # but we will send them to Webots. For a pure sensor reporter, just send what you read.
+    ##################   Think: State‐machine ###################
+    # Voor elke transitie zetten we state_updated = True om nieuwe staat te verzenden
+    if current_state == 'forward':
+        counter = 0
+        if line_right and not line_left:
+            current_state = 'turn_right'
+            state_updated = True
+        elif line_left and not line_right:
+            current_state = 'turn_left'
+            state_updated = True
+        elif line_left and line_right and line_center:  # lijn kwijt
+            current_state = 'turn_left'
+            state_updated = True
+        elif button_right.value():
+            current_state = 'stop'
+            state_updated = True
 
-    # Simulating sensor readings for the example (you'd replace this with real reads)
-    # If you remove this, ensure you assign proper values to line_left, line_center, line_right
-    # from your actual hardware sensor inputs.
-    # For now, let's make them dependent on the time, or a button for testing:
-    # Example: If your line sensors are connected to GPIOs 36, 39, 34 respectively.
-    # line_left = Pin(36, Pin.IN).value()
-    # line_center = Pin(39, Pin.IN).value()
-    # line_right = Pin(34, Pin.IN).value()
+    elif current_state == 'turn_right':
+        if counter >= COUNTER_MAX:
+            current_state = 'forward'
+            state_updated = True
+        elif button_right.value():
+            current_state = 'stop'
+            state_updated = True
 
-    # For demonstration without actual sensors, using buttons to simulate:
-    line_left = button_left.value() # If left button pressed, simulate line on left
-    line_center = led_board.value() # If board LED is on, simulate line in center (heartbeat)
-    line_right = button_right.value() # If right button pressed, simulate line on right
+    elif current_state == 'turn_left':
+        if counter >= COUNTER_MAX:
+            current_state = 'forward'
+            state_updated = True
+        elif button_right.value():
+            current_state = 'stop'
+            state_updated = True
 
-    # Update physical LEDs on ESP32 based on "sensor" readings (for debugging)
-    led_blue.value(line_left)
-    led_green.value(line_center)
-    led_red.value(line_right)
-    
-    # Prepare the sensor message (e.g., "010" for line center)
-    sensor_message_str = ''
-    sensor_message_str += '1' if line_left else '0'
-    sensor_message_str += '1' if line_center else '0'
-    sensor_message_str += '1' if line_right else '0'
-    
-    # Send sensor data to Webots
-    stdout.write(f'{sensor_message_str}\n'.encode('UTF-8'))
-    # print(f"ESP32: Sent sensor data: {sensor_message_str}") # For debugging in Thonny
+    elif current_state == 'stop':
+        led_board.value(1)  # onboard LED branden
+        if counter >= COUNTER_STOP:
+            current_state  = 'forward'
+            state_updated  = True
+            led_board.value(0)
 
-    # --- Read incoming characters from stdin (UART0) ---
-    # We still read, just in case Webots sends anything, but we don't expect motor commands.
-    while True:
-        ch = stdin.read(1)
-        if ch is None:
-            break
-        received_line_buffer += ch
-        if ch == '\n':
-            received_data = received_line_buffer.strip()
-            received_line_buffer = ""
-            # print(f"ESP32: Received unexpected data: '{received_data}'") # Debug any unexpected messages
-            break # Process this line and then check for more
+    ##################   Act: verzend nieuwe staat ###################
+    if state_updated:
+        uart.write(current_state + "\n")
+        state_updated = False
 
-    # A short delay for communication cycle
+    counter += 1
     sleep(0.02)
